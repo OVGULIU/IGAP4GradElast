@@ -1,0 +1,243 @@
+void eval_Energy(double *Energy, double *U0_self, void *app_)
+{
+    
+    
+    
+     
+     
+    /* ================ input parameters ================ */
+    App *app=(App*)app_;
+    // ---- PDE
+    int ndim             = app->ndim;
+    int nddim            = app->nddim;
+    int ndof             = app->ndof;
+    double *par          = app->par;
+    double t             = app->t;
+    // ---- MESH
+    int porder           = app->porder;
+    int nelem_x          = app->nelem_x;
+    int nelem_y          = app->nelem_y;
+    int nelem_z          = app->nelem_z;
+    int nbasis_x         = app->nbasis_x;
+    int nbasis_y         = app->nbasis_y;
+    int nbasis_z         = app->nbasis_z;
+    int nknot_x          = app->nknot_x;
+    int nknot_y          = app->nknot_y;
+    int nknot_z          = app->nknot_z;
+    double *knotVector_x = app->knotVector_x;
+    double *knotVector_y = app->knotVector_y;
+    double *knotVector_z = app->knotVector_z;
+    double dt            = app->dt;
+    // ---- IGA
+    int nquad            = app->nquad;
+    double *cquad        = app->cquad;
+    double *wquad        = app->wquad;
+    // ---- MPI
+    int nproc            = app->nproc;
+    int rank             = app->rank;
+    int npart_x          = app->npart_x;
+    int npart_y          = app->npart_y;
+    int npart_z          = app->npart_z;
+    int ipart_x          = app->ipart_x;
+    int ipart_y          = app->ipart_y;
+    int ipart_z          = app->ipart_z;
+    int ielem_x_begin    = app->ielem_x_begin;
+    int ielem_y_begin    = app->ielem_y_begin;
+    int ielem_z_begin    = app->ielem_z_begin;
+    int nselfIdx         = app->nselfIdx;
+    int *selfIdx         = app->selfIdx;
+    int nsendPart        = app->nsendPart;
+    int *sendPart        = app->sendPart;
+    int nsendIdx         = app->nsendIdx;
+    int *sendIdx         = app->sendIdx;
+    int *sendPtr         = app->sendPtr;
+    int nrecvPart        = app->nrecvPart;
+    int *recvPart        = app->recvPart;
+    int nrecvIdx         = app->nrecvIdx;
+    int *recvIdx         = app->recvIdx;
+    int *recvPtr         = app->recvPtr;
+    int *globalIdx       = app->globalIdx;
+    /* ================ assemble U0 and Ui ================ */
+    double *U0           = (double*) malloc((nselfIdx+nrecvIdx)*sizeof(double));
+    //double *Ui           = (double*) malloc((nselfIdx+nrecvIdx)*sizeof(double));
+
+    //const PetscScalar *U0_self;
+    //const PetscScalar *Ui_self;
+    //ierr = VecGetArrayRead(app->U0,&U0_self);CHKERRQ(ierr);
+    //ierr = VecGetArrayRead(Ui_,&Ui_self);CHKERRQ(ierr);
+    for (int i=0; i<nselfIdx; i++)
+    {
+        U0[selfIdx[i]]=U0_self[i];
+        //Ui[selfIdx[i]]=Ui_self[i];
+    }
+    //ierr = VecRestoreArrayRead(app->U0,&U0_self);CHKERRQ(ierr); free(U0_self);
+    //ierr = VecRestoreArrayRead(Ui_,&Ui_self);CHKERRQ(ierr); free(Ui_self);
+
+    MPI_Status status;
+    int ierror;
+    double *U_send=(double*) malloc(nsendIdx*sizeof(double));
+    double *U_recv=(double*) malloc(nrecvIdx*sizeof(double));
+    for (int i=0; i<nsendIdx; i++) { U_send[i]=U0[sendIdx[i]]; }
+    for (int isendPart=0; isendPart<nsendPart; isendPart++) { ierror=MPI_Send(U_send+sendPtr[isendPart],sendPtr[isendPart+1]-sendPtr[isendPart],MPI_DOUBLE,sendPart[isendPart],1,MPI_COMM_WORLD); }
+    for (int irecvPart=0; irecvPart<nrecvPart; irecvPart++) { ierror=MPI_Recv(U_recv+recvPtr[irecvPart],recvPtr[irecvPart+1]-recvPtr[irecvPart],MPI_DOUBLE,recvPart[irecvPart],1,MPI_COMM_WORLD,&status); }
+    for (int i=0; i<nrecvIdx; i++) { U0[recvIdx[i]]=U_recv[i]; }
+    //for (int i=0; i<nsendIdx; i++) { U_send[i]=Ui[sendIdx[i]]; }
+    //for (int isendPart=0; isendPart<nsendPart; isendPart++) { ierror=MPI_Send(U_send+sendPtr[isendPart],sendPtr[isendPart+1]-sendPtr[isendPart],MPI_DOUBLE,sendPart[isendPart],2,MPI_COMM_WORLD); }
+    //for (int irecvPart=0; irecvPart<nrecvPart; irecvPart++) { ierror=MPI_Recv(U_recv+recvPtr[irecvPart],recvPtr[irecvPart+1]-recvPtr[irecvPart],MPI_DOUBLE,recvPart[irecvPart],2,MPI_COMM_WORLD,&status); }
+    //for (int i=0; i<nrecvIdx; i++) { Ui[recvIdx[i]]=U_recv[i]; }
+    free(U_send);
+    free(U_recv);
+    /* ================ assemble Residual_ ================ */
+    // ---- PDE
+    int nddimxndof=nddim*ndof;
+    double *u0  = (double*) malloc(nddimxndof*sizeof(double));
+    double *energy = (double*) malloc(1*sizeof(double));
+    // ---- Mesh
+    int ibpe;
+    int nbpe = (porder+1)*(porder+1)*(porder+1);                   // number of active basis per element
+    int ibasis;                                                    // local basis id
+    double X0,Y0,Z0,X1,Y1,Z1;
+    // ---- quadrature
+    double xquad;
+    double yquad;
+    double zquad;
+    double xi;
+    double weight;
+    // ---- IGA
+    int ndofxnbpe =ndof*nbpe;
+    int nddimxnbpe=nddim*nbpe;
+    int nddimxidof;
+    int nddimxibpe;
+    double *N = (double*) malloc(nddimxnbpe*sizeof(double));
+    (*Energy)=0.0;
+    int         ia;
+    //int nbasis_x_active=nelem_x+porder;
+    int nbasis_y_active=nelem_y+porder;
+    int nbasis_z_active=nelem_z+porder;
+    /* ---------------- volume integral ---------------- */
+
+    // ---- loop over elements
+    for (int ielem_x=0; ielem_x<nelem_x; ielem_x++) {
+    for (int ielem_y=0; ielem_y<nelem_y; ielem_y++) {
+    for (int ielem_z=0; ielem_z<nelem_z; ielem_z++) {
+        
+    // ---- loop over quadrature points
+    for (int iquad_x=0; iquad_x<nquad; iquad_x++) {
+    for (int iquad_y=0; iquad_y<nquad; iquad_y++) {
+    for (int iquad_z=0; iquad_z<nquad; iquad_z++) {
+        // ---- evaluate quadrature coord.
+        X0=knotVector_x[ielem_x_begin+ielem_x+porder]; X1=knotVector_x[ielem_x_begin+ielem_x+porder+1];
+        Y0=knotVector_y[ielem_y_begin+ielem_y+porder]; Y1=knotVector_y[ielem_y_begin+ielem_y+porder+1];
+        Z0=knotVector_z[ielem_z_begin+ielem_z+porder]; Z1=knotVector_z[ielem_z_begin+ielem_z+porder+1];
+        xi=cquad[iquad_x];xquad=(-xi+1.0)*X0+xi*X1;
+        xi=cquad[iquad_y];yquad=(-xi+1.0)*Y0+xi*Y1;
+        xi=cquad[iquad_z];zquad=(-xi+1.0)*Z0+xi*Z1;
+        // ---- evaluate N
+        ia=0;
+        for (int ibpe_x=0; ibpe_x<porder+1; ibpe_x++){
+        for (int ibpe_y=0; ibpe_y<porder+1; ibpe_y++){
+        for (int ibpe_z=0; ibpe_z<porder+1; ibpe_z++){
+            N[ia++]=evalN(knotVector_x,nknot_x,0,ielem_x_begin+ielem_x+ibpe_x,porder,xquad)
+                   *evalN(knotVector_y,nknot_y,0,ielem_y_begin+ielem_y+ibpe_y,porder,yquad)
+                   *evalN(knotVector_z,nknot_z,0,ielem_z_begin+ielem_z+ibpe_z,porder,zquad);
+            for (int JJ=0; JJ<ndim; JJ++)
+            {
+                N[ia++]=evalN(knotVector_x,nknot_x,(int)(JJ==0),ielem_x_begin+ielem_x+ibpe_x,porder,xquad)
+                       *evalN(knotVector_y,nknot_y,(int)(JJ==1),ielem_y_begin+ielem_y+ibpe_y,porder,yquad)
+                       *evalN(knotVector_z,nknot_z,(int)(JJ==2),ielem_z_begin+ielem_z+ibpe_z,porder,zquad);
+            }
+            for (int JJ=0; JJ<ndim; JJ++)
+            {
+                for (int KK=JJ; KK<ndim; KK++)
+                {
+                    N[ia++]=evalN(knotVector_x,nknot_x,(int)(JJ==0)+(int)(KK==0),ielem_x_begin+ielem_x+ibpe_x,porder,xquad)
+                           *evalN(knotVector_y,nknot_y,(int)(JJ==1)+(int)(KK==1),ielem_y_begin+ielem_y+ibpe_y,porder,yquad)
+                           *evalN(knotVector_z,nknot_z,(int)(JJ==2)+(int)(KK==2),ielem_z_begin+ielem_z+ibpe_z,porder,zquad);
+                }
+            }
+        }}}
+        // ---- evaluate u0 and ui
+        for (ia=0; ia<nddimxndof; ia++) { u0[ia]=0.0; }
+        for (int ibpe_x=0; ibpe_x<porder+1; ibpe_x++){
+        for (int ibpe_y=0; ibpe_y<porder+1; ibpe_y++){
+        for (int ibpe_z=0; ibpe_z<porder+1; ibpe_z++){
+            ibpe=(porder+1)*(porder+1)*ibpe_x+(porder+1)*ibpe_y+ibpe_z;
+            ibasis=(nbasis_y_active*nbasis_z_active)*(ielem_x+ibpe_x)+nbasis_z_active*(ielem_y+ibpe_y)+(ielem_z+ibpe_z);
+            nddimxibpe=nddim*ibpe;
+            for (int idof=0; idof<ndof; idof++)
+            {
+                ia=ndof*ibasis+idof;
+                nddimxidof=nddim*idof;
+                for (int iddim=0; iddim<nddim; iddim++)
+                {
+                    u0[nddimxidof+iddim]+=N[nddimxibpe+iddim]*U0[ia];
+                    //ui[nddimxidof+iddim]+=N[nddimxibpe+iddim]*Ui[ia];
+                }
+            }
+        }}}
+        // ---- evaluate energy
+        eval_energy(energy,u0,par);
+        // ---- add to Energy
+        weight=wquad[iquad_x]*wquad[iquad_y]*wquad[iquad_z]*(X1-X0)*(Y1-Y0)*(Z1-Z0);
+        (*Energy)+=weight*(*energy);
+    }}} // iquad
+    }}} // ielem
+
+    // surface energy
+    if (ipart_x==0)
+    {
+        eval_Energy_surf(Energy,U0,ndim,ndof,t,porder,nelem_x,nelem_y,nelem_z,nbasis_x,nbasis_y,nbasis_z,nknot_x,nknot_y,nknot_z,knotVector_x,knotVector_y,knotVector_z,nquad,cquad,wquad,ielem_x_begin,ielem_y_begin,ielem_z_begin,2);
+    }
+    if (ipart_x==npart_x-1)
+    {
+        eval_Energy_surf(Energy,U0,ndim,ndof,t,porder,nelem_x,nelem_y,nelem_z,nbasis_x,nbasis_y,nbasis_z,nknot_x,nknot_y,nknot_z,knotVector_x,knotVector_y,knotVector_z,nquad,cquad,wquad,ielem_x_begin,ielem_y_begin,ielem_z_begin,3);
+    }
+    if (ipart_y==0)
+    {
+        eval_Energy_surf(Energy,U0,ndim,ndof,t,porder,nelem_x,nelem_y,nelem_z,nbasis_x,nbasis_y,nbasis_z,nknot_x,nknot_y,nknot_z,knotVector_x,knotVector_y,knotVector_z,nquad,cquad,wquad,ielem_x_begin,ielem_y_begin,ielem_z_begin,4);
+    }
+    if (ipart_y==npart_y-1)
+    {
+        eval_Energy_surf(Energy,U0,ndim,ndof,t,porder,nelem_x,nelem_y,nelem_z,nbasis_x,nbasis_y,nbasis_z,nknot_x,nknot_y,nknot_z,knotVector_x,knotVector_y,knotVector_z,nquad,cquad,wquad,ielem_x_begin,ielem_y_begin,ielem_z_begin,5);
+    }
+    if (ipart_z==0)
+    {
+        eval_Energy_surf(Energy,U0,ndim,ndof,t,porder,nelem_x,nelem_y,nelem_z,nbasis_x,nbasis_y,nbasis_z,nknot_x,nknot_y,nknot_z,knotVector_x,knotVector_y,knotVector_z,nquad,cquad,wquad,ielem_x_begin,ielem_y_begin,ielem_z_begin,0);
+    }
+    if (ipart_z==npart_z-1)
+    {
+        eval_Energy_surf(Energy,U0,ndim,ndof,t,porder,nelem_x,nelem_y,nelem_z,nbasis_x,nbasis_y,nbasis_z,nknot_x,nknot_y,nknot_z,knotVector_x,knotVector_y,knotVector_z,nquad,cquad,wquad,ielem_x_begin,ielem_y_begin,ielem_z_begin,1);
+    }
+
+    free(U0);
+    free(energy);
+    free(u0);
+    free(N);
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

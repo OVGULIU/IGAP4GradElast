@@ -1,0 +1,476 @@
+/******** definition ********/
+void plot_solution(HMGL gr, double *U_self, void *app_, int plotID, int nproc, int rank)
+{
+    //mgl_set_num_thr(1);
+    /* ================ input parameters ================ */
+    App *app=(App*)app_;
+    int ndim             = app->ndim;
+    int nddim            = app->nddim;
+    int ndof             = app->ndof;
+    double *par_mat      = app->par_mat;
+    //int *bc_type         = app->bc_type;
+    //double *par_dirichlet= app->par_dirichlet;
+    //double *par_neumann  = app->par_neumann;
+    // ---- MESH
+    int porder           = app->porder;
+    int *nelem           = app->nelem;
+    int *nbasis          = app->nbasis;
+    int *nknot           = app->nknot;
+    double **knotVector  = app->knotVector;
+    // ---- IGA
+    //int nquad            = app->nquad;
+    //double *cquad        = app->cquad;
+    //double *wquad        = app->wquad;
+    // ---- MPI
+    int nselfIdx         = app->nselfIdx;
+    int *selfIdx         = app->selfIdx;
+    int nsendPart        = app->nsendPart;
+    int *sendPart        = app->sendPart;
+    int nsendIdx         = app->nsendIdx;
+    int *sendIdx         = app->sendIdx;
+    int *sendPtr         = app->sendPtr;
+    int nrecvPart        = app->nrecvPart;
+    int *recvPart        = app->recvPart;
+    int nrecvIdx         = app->nrecvIdx;
+    int *recvIdx         = app->recvIdx;
+    int *recvPtr         = app->recvPtr;
+    //int *globalIdx       = app->globalIdx;
+    //int nboun            = app->nboun;
+    //int *boun            = app->boun;
+
+    /* ================ assemble U and Ui ================ */
+    double *U           = (double*) malloc((nselfIdx+nrecvIdx)*sizeof(double));
+    for (int i=0; i<nselfIdx; i++) { U[selfIdx[i]]=U_self[i]; }
+    MPI_Status status;
+    int ierror;
+    double *U_send=(double*) malloc(nsendIdx*sizeof(double));
+    double *U_recv=(double*) malloc(nrecvIdx*sizeof(double));
+    for (int i=0; i<nsendIdx; i++) { U_send[i]=U[sendIdx[i]]; }
+    for (int isendPart=0; isendPart<nsendPart; isendPart++) { ierror=MPI_Send(U_send+sendPtr[isendPart],sendPtr[isendPart+1]-sendPtr[isendPart],MPI_DOUBLE,sendPart[isendPart],1,MPI_COMM_WORLD);assert(ierror==MPI_SUCCESS); }
+    for (int irecvPart=0; irecvPart<nrecvPart; irecvPart++) { ierror=MPI_Recv(U_recv+recvPtr[irecvPart],recvPtr[irecvPart+1]-recvPtr[irecvPart],MPI_DOUBLE,recvPart[irecvPart],1,MPI_COMM_WORLD,&status);assert(ierror==MPI_SUCCESS); }
+    for (int i=0; i<nrecvIdx; i++) { U[recvIdx[i]]=U_recv[i]; }
+    free(U_send);
+    free(U_recv);
+
+    /* ================ set up gr ================ */
+    char titleStr[36];
+    HMGL gr_temp;
+    gr_temp = mgl_create_graph(1200,1200);
+    HMDT cTickVal=mgl_create_data();
+    HMDT xTickVal=mgl_create_data();
+    HMDT yTickVal=mgl_create_data();
+    
+    HMDT zroArray,oneArray;
+    HMDT tArray;
+    HMDT eArray;
+    
+    HMDT xArray,yArray,zArray;
+    HMDT cArray,Psi_c;
+    double rc,xc,yc,zc,x0,y0,Lcube,a0,a1,Lx,Ly,Lz,Ld,Lbase,theta,drel,del,mrgn,x,y,z,*twinBoun,U11,U22,theta_p,theta_m;
+    int ntwinBoun;
+    double emax;
+    
+    switch (plotID)
+    {
+    case 0:
+        break;
+    case 1:
+        break;
+    case 2:
+        break;
+    case 3:
+        break;
+    case 4:
+    case 5:
+    case 6:
+        //sprintf(titleStr,"t=%8.6f, \\Pi=",t);
+        //mgl_title(gr,titleStr,"k:rC",FS);
+        if (0) // standard view
+        {
+            mgl_set_origin(gr,0,0,0);
+            mgl_relplot(gr,-0.5,1.5,-0.5,1.5); // Warning: relplot changes fontsize, too. -1.4 would results in a diff. size
+            mgl_rotate(gr,60,30,0);
+            mgl_aspect(gr,1,1,1);
+            mgl_set_ranges(gr,0.5-0.64,0.5+0.64,0.5-0.64,0.5+0.64,0.5-0.64,0.5+0.64);
+            //mgl_set_ticks(gr,'x',0.1,4,0.0);
+            //mgl_set_ticks(gr,'y',0.1,4,0.0);
+            //mgl_set_ticks(gr,'z',0.1,4,0.0);
+            //mgl_axis(gr,"xyzU","","");
+        }
+        else // top/side view
+        {
+            mgl_set_origin(gr,0,0,0);
+            mgl_relplot(gr,-0.45,1.45,-0.45,1.45);
+            mgl_rotate(gr,0,0,0);
+            mgl_aspect(gr,1,1,1);
+            mgl_set_ranges(gr,-0.075,1.075,-0.075,1.075,-0.075,1.075);
+            mgl_set_ticks(gr,'x',999.0,0,0.0);
+            mgl_set_ticks(gr,'y',999.0,0,0.0);
+            mgl_set_ticks(gr,'z',999.0,0,0.0);
+            //mgl_axis(gr,"xyzU~","","");
+        }
+        mgl_set_range_val(gr,'c',-0.25,0.25);
+        if (plotID==6) { mgl_set_range_val(gr,'c',0,3); }
+        mgl_set_alpha(gr,0);
+        
+        if (rank < nproc) { plot_volume(gr,U,ndim,nddim,ndof,par_mat,porder,nelem,nbasis,nknot,knotVector,plotID,1.0); }
+        
+        break;
+    case 7:
+        break;
+    case 8:
+        break;
+    case 9: // plot 3well free energy ; 
+        assert(nproc==1);// otherwise, axis thickness changes somehow
+        mgl_relplot(gr,-(0.25/0.15-1)/2,1+(0.25/0.15-1)/2,-(0.25/0.15-1)/2,1+(0.25/0.15-1)/2); // Warning: relplot changes fontsize, too. -1.4 would results in a diff. size
+        mgl_set_origin(gr,0,0,0);
+        mgl_rotate(gr,0,0,0);
+        mgl_aspect(gr,1,1,1);
+        emax=0.25;
+        mgl_set_ranges(gr,-1.2*emax,1.2*emax,-1.2*emax,1.2*emax,-1,1);
+        mgl_set_range_val(gr,'c',-1,1);
+        mgl_data_create(xTickVal,3,1,1);
+        mgl_data_set_value(xTickVal,-emax,0,0,0);
+        mgl_data_set_value(xTickVal,   0.,1,0,0);
+        mgl_data_set_value(xTickVal, emax,2,0,0);
+        mgl_set_ticks_val(gr,'x',xTickVal," \n \n ",0);
+        mgl_data_create(yTickVal,2,1,1);
+        mgl_data_set_value(yTickVal,-emax,0,0,0);
+        mgl_data_set_value(yTickVal, emax,1,0,0);
+        mgl_set_ticks_val(gr,'y',yTickVal," \n ",0);
+        mgl_axis(gr,"xyU","","size -1.8;");
+        //mgl_puts(gr,-0.035,-0.065,0,"\\textit{O}","",-1.4);
+        mgl_puts(gr,-0.25-0.02,-0.05,0,"-0.25","",-1.8);
+        mgl_puts(gr, 0.25-0.02,-0.05,0,"+0.25","",-1.8);
+        mgl_puts(gr,-0.07,-0.25-0.02,0,"-0.25","",-1.8);
+        mgl_puts(gr,-0.08, 0.25-0.02,0,"+0.25","",-1.8);
+        mgl_puts(gr,1.32*emax,-0.0125,0,"\\textit{e}_{2}","",-1.8);
+        mgl_puts(gr,0,1.23*emax,0,"\\textit{e}_{3}","",-1.8);
+        
+        // manually draw axis
+        //tArray=mgl_create_data_size(2,1,1);
+        //eArray=mgl_create_data_size(2,1,1);
+        //mgl_data_set_value(tArray,-emax,0,0,0);     mgl_data_set_value(eArray,0,0,0,0);
+        //mgl_data_set_value(tArray, emax,1,0,0);     mgl_data_set_value(eArray,0,1,0,0);
+        //mgl_plot_xy(gr,tArray,eArray,"-k'2'","");
+        //mgl_data_set_value(tArray,0,0,0,0);     mgl_data_set_value(eArray,-emax,0,0,0);
+        //mgl_data_set_value(tArray,0,1,0,0);     mgl_data_set_value(eArray, emax,1,0,0);
+        //mgl_plot_xy(gr,tArray,eArray,"-k'2'","");
+        
+        //mgl_data_set_value(tArray,-sqrt(3)/8,0,0,0);     mgl_data_set_value(eArray,-2.5e-2*emax,0,0,0);
+        //mgl_data_set_value(tArray,-sqrt(3)/8,1,0,0);     mgl_data_set_value(eArray, 2.5e-2*emax,1,0,0);
+        //mgl_plot_xy(gr,tArray,eArray,"-k'1'","");
+        //mgl_data_set_value(tArray, sqrt(3)/8,0,0,0);     mgl_data_set_value(eArray,-2.5e-2*emax,0,0,0);
+        //mgl_data_set_value(tArray, sqrt(3)/8,1,0,0);     mgl_data_set_value(eArray, 2.5e-2*emax,1,0,0);
+        //mgl_plot_xy(gr,tArray,eArray,"-k'1'","");
+        //mgl_data_set_value(tArray,-2.5e-2*emax,0,0,0);     mgl_data_set_value(eArray,-1./4,0,0,0);
+        //mgl_data_set_value(tArray, 2.5e-2*emax,1,0,0);     mgl_data_set_value(eArray,-1./4,1,0,0);
+        //mgl_plot_xy(gr,tArray,eArray,"-k'1'","");
+        //mgl_data_set_value(tArray,-2.5e-2*emax,0,0,0);     mgl_data_set_value(eArray, 1./8,0,0,0);
+        //mgl_data_set_value(tArray, 2.5e-2*emax,1,0,0);     mgl_data_set_value(eArray, 1./8,1,0,0);
+        //mgl_plot_xy(gr,tArray,eArray,"-k'1'","");
+        //mgl_delete_data(tArray);
+        //mgl_delete_data(eArray);
+        
+        if (rank==0)
+        {
+            plot_energy_3well(gr,par_mat,emax);
+        }
+        plot_volume(gr,U,ndim,nddim,ndof,par_mat,porder,nelem,nbasis,nknot,knotVector,plotID,1.0);
+        
+        /*// ---- picture of tetragonal variants
+        tArray=mgl_create_data_size(11,1,1);
+        eArray=mgl_create_data_size(11,1,1);
+        Lcube=0.075; rc=0.26; drel=3./5.; del=1.75e-3; theta=PI/4; 
+        a0=1.03; a1=sqrt(a0*a0-0.25*sqrt(6.));
+        // first well
+        xc=rc*cos(PI/6);yc=rc*sin(PI/6);
+        Lx=Lcube*a0; Ly=Lcube*a1; Ld=Lcube*a1*drel; x0=xc-Lx/2; y0=yc-Ly/2;
+        mgl_data_set_value(tArray,x0                 ,0,0,0);     mgl_data_set_value(eArray,y0+Ly              ,0,0,0);
+        mgl_data_set_value(tArray,x0                 ,1,0,0);     mgl_data_set_value(eArray,y0                 ,1,0,0);
+        mgl_data_set_value(tArray,x0+Lx              ,2,0,0);     mgl_data_set_value(eArray,y0                 ,2,0,0);
+        mgl_data_set_value(tArray,x0+Lx+Ld*cos(theta),3,0,0);     mgl_data_set_value(eArray,y0+Ld*sin(theta)   ,3,0,0);
+        mgl_data_set_value(tArray,x0+Lx+Ld*cos(theta),4,0,0);     mgl_data_set_value(eArray,y0+Ly+Ld*sin(theta),4,0,0);    
+        mgl_data_set_value(tArray,x0   +Ld*cos(theta),5,0,0);     mgl_data_set_value(eArray,y0+Ly+Ld*sin(theta),5,0,0);
+        mgl_data_set_value(tArray,x0                 ,6,0,0);     mgl_data_set_value(eArray,y0+Ly              ,6,0,0);    
+        mgl_data_set_value(tArray,x0+Lx              ,7,0,0);     mgl_data_set_value(eArray,y0+Ly              ,7,0,0);
+        mgl_data_set_value(tArray,x0+Lx+Ld*cos(theta),8,0,0);     mgl_data_set_value(eArray,y0+Ly+Ld*sin(theta),8,0,0);    
+        mgl_data_set_value(tArray,x0+Lx              ,9,0,0);     mgl_data_set_value(eArray,y0+Ly              ,9,0,0);
+        mgl_data_set_value(tArray,x0+Lx              ,10,0,0);    mgl_data_set_value(eArray,y0                 ,10,0,0);
+        mgl_plot_xy(gr,tArray,eArray,"-k'2'","");
+        mgl_face(gr,x0+del,y0+del,0,x0+del,y0+Ly-del,0,x0+Lx-del,y0+del,0,x0+Lx-del,y0+Ly-del,0,"h");
+        mgl_face(gr,x0+del+del*cos(theta),y0+Ly+del*sin(theta),0,x0+Ld*cos(theta)+del-del*cos(theta),y0+Ly+Ld*sin(theta)-del*sin(theta),0,x0+Lx-del+del*cos(theta),y0+Ly+del*sin(theta),0,x0+Lx+Ld*cos(theta)-del-del*cos(theta),y0+Ly+Ld*sin(theta)-del*sin(theta),0,"h");
+        mgl_face(gr,x0+Lx+del*cos(theta),y0+del+del*sin(theta),0,x0+Lx+del*cos(theta),y0+Ly-del+del*sin(theta),0,x0+Lx+Ld*cos(theta)-del*cos(theta),y0+Ld*sin(theta)+del-del*sin(theta),0,x0+Lx+Ld*cos(theta)-del*cos(theta),y0+Ly+Ld*sin(theta)-del-del*sin(theta),0,"h");
+        // second well
+        xc=-rc*cos(PI/6);yc=rc*sin(PI/6);
+        Lx=Lcube*a1; Ly=Lcube*a1; Ld=Lcube*a0*drel; x0=xc-Lx/2; y0=yc-Ly/2;
+        mgl_data_set_value(tArray,x0                 ,0,0,0);     mgl_data_set_value(eArray,y0+Ly              ,0,0,0);
+        mgl_data_set_value(tArray,x0                 ,1,0,0);     mgl_data_set_value(eArray,y0                 ,1,0,0);
+        mgl_data_set_value(tArray,x0+Lx              ,2,0,0);     mgl_data_set_value(eArray,y0                 ,2,0,0);
+        mgl_data_set_value(tArray,x0+Lx+Ld*cos(theta),3,0,0);     mgl_data_set_value(eArray,y0+Ld*sin(theta)   ,3,0,0);
+        mgl_data_set_value(tArray,x0+Lx+Ld*cos(theta),4,0,0);     mgl_data_set_value(eArray,y0+Ly+Ld*sin(theta),4,0,0);    
+        mgl_data_set_value(tArray,x0   +Ld*cos(theta),5,0,0);     mgl_data_set_value(eArray,y0+Ly+Ld*sin(theta),5,0,0);
+        mgl_data_set_value(tArray,x0                 ,6,0,0);     mgl_data_set_value(eArray,y0+Ly              ,6,0,0);    
+        mgl_data_set_value(tArray,x0+Lx              ,7,0,0);     mgl_data_set_value(eArray,y0+Ly              ,7,0,0);
+        mgl_data_set_value(tArray,x0+Lx+Ld*cos(theta),8,0,0);     mgl_data_set_value(eArray,y0+Ly+Ld*sin(theta),8,0,0);    
+        mgl_data_set_value(tArray,x0+Lx              ,9,0,0);     mgl_data_set_value(eArray,y0+Ly              ,9,0,0);
+        mgl_data_set_value(tArray,x0+Lx              ,10,0,0);    mgl_data_set_value(eArray,y0                 ,10,0,0);
+        mgl_plot_xy(gr,tArray,eArray,"-k'2'","");
+        mgl_face(gr,x0+del,y0+del,0,x0+del,y0+Ly-del,0,x0+Lx-del,y0+del,0,x0+Lx-del,y0+Ly-del,0,"h");
+        mgl_face(gr,x0+del+del*cos(theta),y0+Ly+del*sin(theta),0,x0+Ld*cos(theta)+del-del*cos(theta),y0+Ly+Ld*sin(theta)-del*sin(theta),0,x0+Lx-del+del*cos(theta),y0+Ly+del*sin(theta),0,x0+Lx+Ld*cos(theta)-del-del*cos(theta),y0+Ly+Ld*sin(theta)-del*sin(theta),0,"h");
+        mgl_face(gr,x0+Lx+del*cos(theta),y0+del+del*sin(theta),0,x0+Lx+del*cos(theta),y0+Ly-del+del*sin(theta),0,x0+Lx+Ld*cos(theta)-del*cos(theta),y0+Ld*sin(theta)+del-del*sin(theta),0,x0+Lx+Ld*cos(theta)-del*cos(theta),y0+Ly+Ld*sin(theta)-del-del*sin(theta),0,"h");
+        // third well
+        xc=0;yc=-rc;
+        Lx=Lcube*a1; Ly=Lcube*a0; Ld=Lcube*a1*drel; theta=PI/4; x0=xc-Lx/2; y0=yc-Ly/2;
+        mgl_data_set_value(tArray,x0                 ,0,0,0);     mgl_data_set_value(eArray,y0+Ly              ,0,0,0);
+        mgl_data_set_value(tArray,x0                 ,1,0,0);     mgl_data_set_value(eArray,y0                 ,1,0,0);
+        mgl_data_set_value(tArray,x0+Lx              ,2,0,0);     mgl_data_set_value(eArray,y0                 ,2,0,0);
+        mgl_data_set_value(tArray,x0+Lx+Ld*cos(theta),3,0,0);     mgl_data_set_value(eArray,y0+Ld*sin(theta)   ,3,0,0);
+        mgl_data_set_value(tArray,x0+Lx+Ld*cos(theta),4,0,0);     mgl_data_set_value(eArray,y0+Ly+Ld*sin(theta),4,0,0);    
+        mgl_data_set_value(tArray,x0   +Ld*cos(theta),5,0,0);     mgl_data_set_value(eArray,y0+Ly+Ld*sin(theta),5,0,0);
+        mgl_data_set_value(tArray,x0                 ,6,0,0);     mgl_data_set_value(eArray,y0+Ly              ,6,0,0);    
+        mgl_data_set_value(tArray,x0+Lx              ,7,0,0);     mgl_data_set_value(eArray,y0+Ly              ,7,0,0);
+        mgl_data_set_value(tArray,x0+Lx+Ld*cos(theta),8,0,0);     mgl_data_set_value(eArray,y0+Ly+Ld*sin(theta),8,0,0);    
+        mgl_data_set_value(tArray,x0+Lx              ,9,0,0);     mgl_data_set_value(eArray,y0+Ly              ,9,0,0);
+        mgl_data_set_value(tArray,x0+Lx              ,10,0,0);    mgl_data_set_value(eArray,y0                 ,10,0,0);
+        mgl_plot_xy(gr,tArray,eArray,"-k'2'","");
+        mgl_face(gr,x0+del,y0+del,0,x0+del,y0+Ly-del,0,x0+Lx-del,y0+del,0,x0+Lx-del,y0+Ly-del,0,"h");
+        mgl_face(gr,x0+del+del*cos(theta),y0+Ly+del*sin(theta),0,x0+Ld*cos(theta)+del-del*cos(theta),y0+Ly+Ld*sin(theta)-del*sin(theta),0,x0+Lx-del+del*cos(theta),y0+Ly+del*sin(theta),0,x0+Lx+Ld*cos(theta)-del-del*cos(theta),y0+Ly+Ld*sin(theta)-del*sin(theta),0,"h");
+        mgl_face(gr,x0+Lx+del*cos(theta),y0+del+del*sin(theta),0,x0+Lx+del*cos(theta),y0+Ly-del+del*sin(theta),0,x0+Lx+Ld*cos(theta)-del*cos(theta),y0+Ld*sin(theta)+del-del*sin(theta),0,x0+Lx+Ld*cos(theta)-del*cos(theta),y0+Ly+Ld*sin(theta)-del-del*sin(theta),0,"h");
+        
+        mgl_delete_data(tArray);
+        mgl_delete_data(eArray);*/
+        
+        break;
+    case 11: // plot color bar (crop to 550pixel)
+        assert(nproc==1);
+        mgl_set_origin(gr,0,0,0);
+        mgl_rotate(gr,0,0,0);
+        mgl_aspect(gr,1,1,1);
+        mgl_set_ranges(gr,0,1,0,1,0,1);
+        if (0)
+        {
+            mgl_set_range_val(gr,'c',-0.25,0.25);
+            mgl_data_create(cTickVal,3,1,1);
+            mgl_data_set_value(cTickVal,-0.25,0,0,0);
+            mgl_data_set_value(cTickVal,0    ,1,0,0);
+            mgl_data_set_value(cTickVal, 0.25,2,0,0);
+            mgl_set_ticks_val(gr,'c',cTickVal,"\n\n",0);
+            //mgl_set_ticks(gr,'c',0.25,1,-1.0);
+            //mgl_colorbar(gr,"<");
+            mgl_set_tick_rotate(gr,1);
+            mgl_colorbar_ext(gr,"<+",0.1,0,1.00,1.00);
+            
+            mgl_puts(gr,0.12,1.0-0.038,0,"+0.25","",-1.4*(0.25/0.15));
+            mgl_puts(gr,0.12,0.5-0.038,0,"0","",-1.4*(0.25/0.15));
+            mgl_puts(gr,0.12,0.0-0.038,0,"-0.25","",-1.4*(0.25/0.15));
+        }
+        else
+        {
+            mgl_set_range_val(gr,'c',0.0,1.0);
+            mgl_data_create(cTickVal,4,1,1);
+            mgl_data_set_value(cTickVal,0,0,0,0);
+            mgl_data_set_value(cTickVal,1,1,0,0);
+            mgl_data_set_value(cTickVal,2,2,0,0);
+            mgl_data_set_value(cTickVal,4,3,0,0);
+            mgl_set_ticks_val(gr,'c',cTickVal,"\n\n\n",0);
+            //mgl_set_ticks(gr,'c',0.25,1,-1.0);
+            //mgl_colorbar(gr,"<");
+            mgl_set_tick_rotate(gr,1);
+            mgl_colorbar_ext(gr,"<+{xFFA500}{x3CB371}{xD2691E}|",0.1,0,1.00,1.00);
+            
+            mgl_puts(gr,0.12,1.0-0.21,0,"3","",-1.4*(0.25/0.15));
+            mgl_puts(gr,0.12,0.5-0.04,0,"2","",-1.4*(0.25/0.15));
+            mgl_puts(gr,0.12,0.0+0.13,0,"1","",-1.4*(0.25/0.15));
+        }
+        break;
+    case 12: // plot xyz-axis (crop to 550pixel)
+        //// xyz
+        //mgl_set_origin(gr,0,0,0);
+        //mgl_rotate(gr,60,30,0); double rotate_correct=1.3;
+        //mgl_aspect(gr,1,1,1);
+        //mgl_set_ranges(gr,0,1,0,1,0,1);
+        
+        //zroArray=mgl_create_data_size(2,1,1);
+        //oneArray=mgl_create_data_size(2,1,1);
+        //mgl_data_set_value(zroArray,0,0,0,0);mgl_data_set_value(oneArray,0,1,0,0);
+        //mgl_data_set_value(oneArray,0,0,0,0);mgl_data_set_value(oneArray,0.25,1,0,0);
+        //mgl_plot_xyz(gr,oneArray,zroArray,zroArray,"Ak'2'","");
+        //mgl_plot_xyz(gr,zroArray,oneArray,zroArray,"Ak'2'","");
+        //mgl_plot_xyz(gr,zroArray,zroArray,oneArray,"Ak'2'","");
+        //mgl_delete_data(zroArray);
+        //mgl_delete_data(oneArray);
+        
+        //mgl_puts(gr,0.25*1.3,0,0,"\\textit{x}","",-1.4*(0.25/0.15)*rotate_correct);
+        //mgl_puts(gr,0,0.25*1.4,0,"\\textit{y}","",-1.4*(0.25/0.15)*rotate_correct);
+        //mgl_puts(gr,0,0,0.25*1.2,"\\textit{z}","",-1.4*(0.25/0.15)*rotate_correct);
+        
+        // xy
+        mgl_set_origin(gr,0,0,0);
+        mgl_rotate(gr,0,0,0); double rotate_correct=1.09;
+        mgl_aspect(gr,1,1,1);
+        mgl_set_ranges(gr,0,1,0,1,0,1);
+        mgl_set_mark_size(gr,3);
+        
+        zroArray=mgl_create_data_size(2,1,1);
+        oneArray=mgl_create_data_size(2,1,1);
+        mgl_data_set_value(zroArray,0,0,0,0);mgl_data_set_value(oneArray,0,1,0,0);
+        mgl_data_set_value(oneArray,0,0,0,0);mgl_data_set_value(oneArray,0.25,1,0,0);
+        mgl_plot_xyz(gr,oneArray,zroArray,zroArray,"Ak'2'","");
+        mgl_plot_xyz(gr,zroArray,oneArray,zroArray,"Ak'2'","");
+        mgl_plot_xyz(gr,zroArray,zroArray,zroArray,"ok'2'","");
+        mgl_set_mark_size(gr,2);mgl_plot_xyz(gr,zroArray,zroArray,zroArray,"xk'2'","");
+        mgl_delete_data(zroArray);
+        mgl_delete_data(oneArray);
+        
+        mgl_puts(gr,0.25*1.2,-0.25*0.12,0,"\\textit{x}","",-1.4*(0.25/0.15)*rotate_correct);
+        mgl_puts(gr,0,0.25*1.15,0,"\\textit{z}","",-1.4*(0.25/0.15)*rotate_correct);
+        mgl_puts(gr,-0.25*0.3,-0.25*0.3,0,"\\textit{y}","",-1.4*(0.25/0.15)*rotate_correct);
+        break;
+    case 13:// plot analytical twin
+        assert(nproc==1);
+        mgl_relplot(gr,-(0.25/0.15-1)/2,1+(0.25/0.15-1)/2,-(0.25/0.15-1)/2,1+(0.25/0.15-1)/2); // Warning: relplot changes fontsize, too. -1.4 would results in a diff. size
+        mgl_set_origin(gr,0,0,0);
+        mgl_rotate(gr,0,0,0);
+        mgl_aspect(gr,1,1,1);
+        //mgl_set_ranges(gr,100,500,50,450,0,0);
+        mgl_set_ranges(gr,100,500,-450,-50,0,0);
+        mgl_set_range_val(gr,'c',0,1);
+        //mgl_axis(gr,"xyU~","","size -1.4;");
+        //mgl_puts(gr,-0.035,-0.065,0,"\\textit{O}","",-1.4);
+        
+        if (rank==0)
+        {
+            U11=sqrt(2.0*4.0/sqrt(6.0)*0.25+1.0);
+            U22=sqrt(2.0*1.0/sqrt(6.0)*0.25+1.0);
+            theta_p=PI/2.0+PI/36.0;//PI/24.0;
+            theta_m=theta_p-(PI/2.0-2*atan(U22/U11));
+            x0=0;
+            y0=0;
+            ntwinBoun=16;
+            twinBoun=(double*) malloc(ntwinBoun*sizeof(double));
+            twinBoun[0]=-999;twinBoun[1]=160;twinBoun[2]=200;twinBoun[3]=240;twinBoun[4]=300;twinBoun[5]=360;twinBoun[6]=400;twinBoun[7]=440;twinBoun[8]=480;twinBoun[9]=520;twinBoun[10]=560;twinBoun[11]=580;twinBoun[12]=600;twinBoun[13]=620;twinBoun[14]=640;twinBoun[15]=999;
+            xArray=mgl_create_data_size(500,500,1);
+            yArray=mgl_create_data_size(500,500,1);
+            zArray=mgl_create_data_size(500,500,1);
+            for (int itwinBoun=0; itwinBoun<ntwinBoun-1; itwinBoun++)
+            {
+                for (int i=0; i<500; i++)
+                {
+                    for (int j=0; j<500; j++)
+                    {
+                        x=1.0*i;
+                        y=1.0*j;
+                        if (x+y>=twinBoun[itwinBoun] && x+y<twinBoun[itwinBoun+1])
+                        {
+                            if (itwinBoun%2==0)
+                            {
+                                mgl_data_set_value(xArray, cos(theta_p)*(U11*x)+sin(theta_p)*(U22*y)+x0,i,j,0);
+                                mgl_data_set_value(yArray,-sin(theta_p)*(U11*x)+cos(theta_p)*(U22*y)+y0,i,j,0);
+                                mgl_data_set_value(zArray,0,i,j,0);
+                            }
+                            else
+                            {
+                                mgl_data_set_value(xArray, cos(theta_m)*(U22*x)+sin(theta_m)*(U11*y)+x0,i,j,0);
+                                mgl_data_set_value(yArray,-sin(theta_m)*(U22*x)+cos(theta_m)*(U11*y)+y0,i,j,0);
+                                mgl_data_set_value(zArray,1,i,j,0);
+                            }
+                        }
+                    }
+                }
+                if (itwinBoun%2==0)
+                {
+                    x0=( cos(theta_p)*(U11*twinBoun[itwinBoun+1])+sin(theta_p)*(U22*0)+x0)-( cos(theta_m)*(U22*twinBoun[itwinBoun+1])+sin(theta_m)*(U11*0));
+                    y0=(-sin(theta_p)*(U11*twinBoun[itwinBoun+1])+cos(theta_p)*(U22*0)+y0)-(-sin(theta_m)*(U22*twinBoun[itwinBoun+1])+cos(theta_m)*(U11*0));
+                }
+                else
+                {
+                    x0=( cos(theta_m)*(U22*twinBoun[itwinBoun+1])+sin(theta_m)*(U11*0)+x0)-( cos(theta_p)*(U11*twinBoun[itwinBoun+1])+sin(theta_p)*(U22*0));
+                    y0=(-sin(theta_m)*(U22*twinBoun[itwinBoun+1])+cos(theta_m)*(U11*0)+y0)-(-sin(theta_p)*(U11*twinBoun[itwinBoun+1])+cos(theta_p)*(U22*0));
+                }
+            }
+            //mgl_dens_xy(gr,xArray,yArray,zArray,"{xFFA500}{x3CB371}|#","meshnum 49");
+            mgl_dens_xy(gr,xArray,yArray,zArray,"{xD2691E}{xFFA500}|#","meshnum 49");
+            mgl_delete_data(xArray);
+            mgl_delete_data(yArray);
+            mgl_delete_data(zArray);
+            free(twinBoun);
+        }
+        break;
+    case 14: // plot legend (crop to 550pixel)
+        //mgl_set_origin(gr,0,0,0);
+        //mgl_rotate(gr,0,0,0);
+        //mgl_aspect(gr,1,1,1);
+        //mgl_set_ranges(gr,0,1,0,1,0,1);
+        
+        //HMDT dummyArray;
+        //dummyArray=mgl_create_data_size(1,1,1);
+        //mgl_data_set_value(dummyArray,999,0,0,0);
+        //mgl_plot_xy(gr,dummyArray,dummyArray,"-k*","");
+        //mgl_add_legend(gr,"","=k");//mgl_add_legend(gr,"0.10","=k");
+        //mgl_plot_xy(gr,dummyArray,dummyArray,"-k*","");
+        //mgl_add_legend(gr,"","jk");//mgl_add_legend(gr,"0.50","jk");
+        //mgl_plot_xy(gr,dummyArray,dummyArray,"-k*","");
+        //mgl_add_legend(gr,"","-k");//mgl_add_legend(gr,"0.90","-k");
+        //mgl_delete_data(dummyArray);
+        //mgl_legend(gr,0,"wkk:rC","size -1.4;");
+        
+        //double legendx=0.25;
+        //double legendy=0.10;
+        //double legendd=0.07;
+        //mgl_puts(gr,legendx,legendy-legendd,0,"0.9","",-1.4);
+        //mgl_puts(gr,legendx,legendy        ,0,"0.5","",-1.4);
+        //mgl_puts(gr,legendx,legendy+legendd,0,"0.1","",-1.4);
+        
+        //// ---- combine and output graphics
+        //if (rank!=0)
+        //{ mgl_mpi_send(gr,0); }
+        //else
+        //{
+            //for (int iproc=1; iproc<nproc; iproc++)
+            //{
+                //mgl_mpi_recv(gr_temp,iproc);
+                //mgl_combine_gr(gr,gr_temp);
+            //}
+        //}
+        break;
+    default:
+        assert(plotID<999);
+    } // switch (plotID)
+    
+    // ---- combine and output graphics
+    if (rank!=0)
+    { mgl_mpi_send(gr,0); }
+    else
+    {
+        for (int iproc=1; iproc<nproc; iproc++)
+        {
+            mgl_mpi_recv(gr_temp,iproc);
+            mgl_combine_gr(gr,gr_temp);
+        }
+    }
+    // ---- finalize
+    mgl_delete_graph(gr_temp);
+    mgl_delete_data(xTickVal);
+    mgl_delete_data(yTickVal);
+    mgl_delete_data(cTickVal);
+    free(U);
+}
+
+/*
+ * ---- plot_time_energy.c & plot_convergence.c
+ * LineWidth = '2' : paper
+ *             '3' : slides
+ * 
+ * ---- plot_solution.c
+ * MarkerSize= '1' : paper
+ *             '1' : slides
+ * 
+ * ---- main.c
+ * Fontsize = 3 (x1.4) : paper
+ *            4 (x1.4) : slide
+ * 
+*/
+
+
+
